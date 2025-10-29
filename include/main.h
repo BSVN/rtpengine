@@ -93,6 +93,8 @@ enum endpoint_learning {
 
 #define RTPE_CONFIG_INT64_PARAMS \
 	X(bw_limit) \
+	X(warn_timeout_us) \
+	X(warn_backoff_us) \
 	X(silent_timeout_us) \
 	X(timeout_us) \
 	X(final_timeout_us) \
@@ -175,6 +177,7 @@ enum endpoint_learning {
 	X(redis_write_ep) \
 	X(redis_subscribe_ep) \
 	X(homer_ep) \
+	X(timeout_warn_ep) \
 	X(dtmf_udp_ep)
 
 #define RTPE_CONFIG_ENDPOINT_QUEUE_PARAMS \

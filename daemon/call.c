@@ -41,6 +41,68 @@
 
 #include "xt_RTPENGINE.h"
 
+static socket_t timeout_warn_sock;
+
+bool timeout_warn_init(void) {
+	if (!open_v46_socket(&timeout_warn_sock, SOCK_DGRAM)) {
+		ilog(LOG_ERR, "Failed to open/connect timeout warning socket: %s", strerror(errno));
+		return false;
+	}
+	return true;
+}
+
+static GString *timeout_warn_json_print(call_t *call, struct packet_stream *ps)
+{
+	
+	struct call_monologue *ml = ps->media->monologue;
+
+	GString *buf = g_string_new("");
+	g_string_append_printf(buf, "{"
+			"\"callid\":\"" STR_FORMAT "\","
+			"\"src_tag\":\"" STR_FORMAT "\","
+			"\"source_label\":\"" STR_FORMAT "\",",
+			STR_FMT(&call->callid),
+			STR_FMT(&ml->tag),
+			STR_FMT(ml->label.s ? &ml->label : &STR_EMPTY));
+
+	g_string_append_printf(buf, "\"dst_tags\":[");
+	
+	// TODO check "to tag" not repeated ?
+	bool first = true;
+	for (__auto_type l = ps->rtp_sinks.head; l; l = l->next) {
+		ml = l->data->sink->media->monologue;
+		if(first){
+			g_string_append_printf(buf,
+			"\"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+			first = false;
+		}else{
+			g_string_append_printf(buf,
+			", \"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+		}
+	}
+
+	for (__auto_type l = ps->rtcp_sinks.head; l; l = l->next) {
+		ml = l->data->sink->media->monologue;
+		if(first){
+			g_string_append_printf(buf,
+			"\"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+			first = false;
+		}else{
+			g_string_append_printf(buf,
+			", \"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+
+		}
+	}
+	g_string_append_printf(buf, "], ");
+
+	g_string_append_printf(buf,
+			"\"type\":\"timeout_warn\",\"timestamp\":%lu,\"source_ip\":\"%s\"}",
+			(unsigned long) rtpe_now / 1000000,
+			sockaddr_print_buf(&ps->endpoint.address));
+
+	return buf;
+}
+
 struct iterator_helper {
 	uint64_t		count;
 	GSList			*del_timeout;
@@ -139,6 +201,9 @@ static void call_timer_iterator(call_t *c, struct iterator_helper *hlp) {
 	rwlock_lock_r(&c->master_lock);
 	log_info_call(c);
 
+	int64_t warn_timeout = atomic_get_na(&rtpe_config.warn_timeout_us);
+	int64_t warn_backoff = atomic_get_na(&rtpe_config.warn_backoff_us);
+
 	// final timeout applicable to all calls (own and foreign)
 	int64_t final_timeout = atomic_get_na(&rtpe_config.final_timeout_us);
 	if (final_timeout && rtpe_now >= (c->created + final_timeout)) {
@@ -221,6 +286,20 @@ static void call_timer_iterator(call_t *c, struct iterator_helper *hlp) {
 			CALL_CLEAR(sfd->call, FOREIGN_MEDIA);
 
 no_sfd:
+		// check for timeout warning
+		// ignore deleted streams(delete delay set)
+		if(warn_timeout && (!ps->call->deleted_us) && (rtpe_now - timestamp) > warn_timeout){
+			if((rtpe_now - ps->last_warn_time) > warn_backoff){
+				GString *buf = timeout_warn_json_print(c, ps);
+				if (socket_sendto(&timeout_warn_sock, buf->str, buf->len, &rtpe_config.timeout_warn_ep) < 0){
+					ilog(LOG_ERR, "Error sending timeout warning event info to UDP destination %s: %s",
+						endpoint_print_buf(&rtpe_config.timeout_warn_ep),
+						strerror(errno));
+				}
+				g_string_free(buf, TRUE);
+				ps->last_warn_time = rtpe_now;
+			}
+		}
 		if (good)
 			continue;
 
@@ -1006,6 +1085,7 @@ struct packet_stream *__packet_stream_new(call_t *call) {
 	mutex_init(&stream->lock);
 	stream->call = call;
 	atomic64_set_na(&stream->last_packet_us, rtpe_now);
+	stream->last_warn_time = 0;
 	stream->rtp_stats = rtp_stats_ht_new();
 	recording_init_stream(stream);
 	stream->send_timer = send_timer_new(stream);

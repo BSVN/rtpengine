@@ -438,6 +438,7 @@ struct packet_stream {
 	struct send_timer	*send_timer;				/* RO */
 	struct jitter_buffer	*jb;					/* RO */
 	int64_t			kernel_time_us;
+	int64_t last_warn_time;
 
 	struct stream_stats	*stats_in;
 	struct stream_stats	*stats_out;
@@ -909,6 +910,8 @@ void __rtp_stats_update(rtp_stats_ht dst, struct codec_store *);
 bool __init_stream(struct packet_stream *ps);
 
 const rtp_payload_type *__rtp_stats_codec(struct call_media *m);
+
+bool timeout_warn_init(void);
 
 #include "str.h"
 #include "rtp.h"

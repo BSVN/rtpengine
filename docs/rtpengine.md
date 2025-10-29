@@ -272,6 +272,24 @@ at the command line. See the __\-\-config-file__ option below for details.
     is removed from __rtpengine__'s internal state table.
     Defaults to 60 seconds.
 
+- __\-\-timeout-warn-dest=__*IP46*:*PORT*
+
+    Configures a target address for logging detected RTP timeout warning.
+    This sends the JSON payload to the
+    given address as UDP packets.
+
+- __\-\-warn-timeout=__*SECS*
+
+    Takes the number of seconds as argument after which a warning will be issued 
+    for a packet stream if no media traffic has been received.
+    Defaults is disabled(0).
+
+- __\-\-warn-backoff=__*SECS*
+
+    Takes the number of seconds as backoff time between 
+    consecutive RTP timeout warnings for a packet stream.
+    Defaults is 5 seconds.
+
 - __-s__, __\-\-silent-timeout=__*SECS*
 
     Ditto as the __\-\-timeout__ option, but applies to muted or inactive media
