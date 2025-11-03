@@ -55,12 +55,18 @@ static GString *timeout_warn_json_print(call_t *call, struct packet_stream *ps)
 {
 	
 	struct call_monologue *ml = ps->media->monologue;
+	GList *l = rtpe_config.ng_listen_ep.head;
+	endpoint_t *e = l->data;
 
 	GString *buf = g_string_new("");
 	g_string_append_printf(buf, "{"
+			"\"type\":\" %s \","
+			"\"port\":\" %u \","
 			"\"callid\":\"" STR_FORMAT "\","
 			"\"src_tag\":\"" STR_FORMAT "\","
 			"\"source_label\":\"" STR_FORMAT "\",",
+			PS_ISSET(ps, RTCP)? "RTCP":"RTP",
+			e->port,
 			STR_FMT(&call->callid),
 			STR_FMT(&ml->tag),
 			STR_FMT(ml->label.s ? &ml->label : &STR_EMPTY));
@@ -287,17 +293,27 @@ static void call_timer_iterator(call_t *c, struct iterator_helper *hlp) {
 
 no_sfd:
 		// check for timeout warning
-		// ignore deleted streams(delete delay set)
-		if(warn_timeout && (!ps->call->deleted_us) && (rtpe_now - timestamp) > warn_timeout){
-			if((rtpe_now - ps->last_warn_time) > warn_backoff){
-				GString *buf = timeout_warn_json_print(c, ps);
-				if (socket_sendto(&timeout_warn_sock, buf->str, buf->len, &rtpe_config.timeout_warn_ep) < 0){
-					ilog(LOG_ERR, "Error sending timeout warning event info to UDP destination %s: %s",
-						endpoint_print_buf(&rtpe_config.timeout_warn_ep),
-						strerror(errno));
-				}
-				g_string_free(buf, TRUE);
-				ps->last_warn_time = rtpe_now;
+		bool deleted_streams = ps->call->deleted_us; 
+		bool warning_before_establsh = (!c->established)||((rtpe_now - c->established) < warn_timeout);
+		bool timed_out = (rtpe_now - packet_stream_last_packet(ps)) > warn_timeout;
+		bool backoff = (rtpe_now - ps->last_warn_time) < warn_backoff;
+
+		bool issue_warning = warn_timeout && !deleted_streams && !warning_before_establsh && timed_out && !backoff;
+		if(issue_warning){
+			GString *buf = timeout_warn_json_print(c, ps);
+			if (socket_sendto(&timeout_warn_sock, buf->str, buf->len, &rtpe_config.timeout_warn_ep) < 0){
+				ilog(LOG_ERR, "Error sending timeout warning event info to UDP destination %s: %s",
+					endpoint_print_buf(&rtpe_config.timeout_warn_ep),
+					strerror(errno));
+			}
+			g_string_free(buf, TRUE);
+			// TODO put last_warn_time on call?
+			ps->last_warn_time = rtpe_now;
+			for (__auto_type l = ps->rtp_sinks.head; l; l = l->next) {
+				l->data->sink->last_warn_time = rtpe_now;
+			}
+			for (__auto_type l = ps->rtcp_sinks.head; l; l = l->next) {
+				l->data->sink->last_warn_time = rtpe_now;
 			}
 		}
 		if (good)
@@ -4720,6 +4736,7 @@ static call_t *call_create(const str *callid) {
 	call_memory_arena_set(c);
 	c->callid = call_str_cpy(callid);
 	c->created = rtpe_now;
+	c->established = 0;
 	c->dtls_cert = dtls_cert();
 	c->tos = rtpe_config.default_tos;
 	c->poller = rtpe_get_poller();
@@ -5504,6 +5521,11 @@ tag_setup:
 	/* the fromtag monologue may be newly created, or half-complete from the totag, or
 	 * derived from the viabranch. */
 	__monologue_tag(ft, fromtag);
+
+	if(!call->established){
+		call->established = rtpe_now;
+	}
+	
 
 	dialogue_unconfirm(ft, "dialogue signalling event");
 	dialogue_unconfirm(tt, "dialogue signalling event");

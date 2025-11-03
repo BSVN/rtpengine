@@ -781,6 +781,7 @@ struct call {
 	str			callid;
 	str_q			callid_aliases;
 	int64_t			created;
+	int64_t			established;
 	int64_t			destroyed;
 	int64_t			last_signal_us;
 	int64_t			deleted_us;
