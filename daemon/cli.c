@@ -67,6 +67,8 @@ static void cli_incoming_set_maxcpu(str *instr, struct cli_writer *cw, const cli
 static void cli_incoming_set_maxload(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_set_maxbw(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_set_timeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
+static void cli_incoming_set_warntimeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
+static void cli_incoming_set_warnbackoff(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_set_silenttimeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_set_offertimeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_set_finaltimeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
@@ -94,6 +96,8 @@ static void cli_incoming_list_totals(str *instr, struct cli_writer *cw, const cl
 static void cli_incoming_list_counters(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_list_sessions(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_list_timeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
+static void cli_incoming_list_warntimeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
+static void cli_incoming_list_warnbackoff(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_list_silenttimeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_list_offertimeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
 static void cli_incoming_list_finaltimeout(str *instr, struct cli_writer *cw, const cli_handler_t *);
@@ -158,6 +162,8 @@ HANDLER_START(cli_set_handlers)
 	HANDLER_CMD("maxload",			cli_incoming_set_maxload,		"<float>",				"set maxmimum load average allowed")
 	HANDLER_CMD("maxbw",			cli_incoming_set_maxbw,			"<uint>",				"set maxmimum bandwidth usage average allowed")
 	HANDLER_CMD("timeout",			cli_incoming_set_timeout,		"<uint>",				"set the --timeout parameter")
+	HANDLER_CMD("warntimeout",		cli_incoming_set_warntimeout,		"<uint>",				"set the --warn-timeout parameter")
+	HANDLER_CMD("warnbackoff",		cli_incoming_set_warnbackoff,		"<uint>",				"set the --warn-backoff parameter")
 	HANDLER_CMD("silenttimeout",		cli_incoming_set_silenttimeout,		"<uint>",				"set the --silent-timeout parameter")
 	HANDLER_CMD("offertimeout",		cli_incoming_set_offertimeout,		"<uint>",				"set the --offer-timeout parameter")
 	HANDLER_CMD("finaltimeout",		cli_incoming_set_finaltimeout,		"<uint>",				"set the --final-timeout parameter")
@@ -183,6 +189,8 @@ HANDLER_START(cli_list_handlers)
 	HANDLER_CMD("maxbw",			cli_incoming_list_maxbw	,		NULL,					"print maxmimum bandwidth usage average allowed")
 	HANDLER_CMD("timeout",			cli_incoming_list_timeout,		NULL,					"print timeout parameter")
 	HANDLER_CMD("silenttimeout",		cli_incoming_list_silenttimeout,	NULL,					"print silent-timeout parameter")
+	HANDLER_CMD("warntimeout",		cli_incoming_list_warntimeout,	NULL,					"print warn-timeout parameter")
+	HANDLER_CMD("warnbackoff",		cli_incoming_list_warnbackoff,	NULL,					"print warn-backoff parameter")
 	HANDLER_CMD("offertimeout",		cli_incoming_list_offertimeout,		NULL,					"print offer-timeout parameter")
 	HANDLER_CMD("finaltimeout",		cli_incoming_list_finaltimeout,		NULL,					"print final-timeout parameter")
 	HANDLER_CMD("loglevels",		cli_incoming_list_loglevels,		NULL,					"list available log levels")
@@ -515,6 +523,8 @@ RTPE_CONFIG_ENDPOINT_QUEUE_PARAMS
 	X(load_limit, "max-load") \
 	X(bw_limit, "max-bw") \
 	X(timeout_us, "timeout") \
+	X(warn_timeout_us, "warn-timeout") \
+	X(warn_backoff_us, "warn-backoff") \
 	X(silent_timeout_us, "silent-timeout") \
 	X(final_timeout_us, "final-timeout") \
 	X(control_tos, "control-tos") \
@@ -652,6 +662,12 @@ static void cli_incoming_list_maxopenfiles(str *instr, struct cli_writer *cw, co
 
 static void cli_incoming_list_timeout(str *instr, struct cli_writer *cw, const cli_handler_t *handler) {
 	cw->cw_printf(cw, "TIMEOUT=%" PRId64 "\n", rtpe_config.timeout_us / 1000000L);
+}
+static void cli_incoming_list_warntimeout(str *instr, struct cli_writer *cw, const cli_handler_t *handler) {
+	cw->cw_printf(cw, "WARN_TIMEOUT=%" PRId64 "\n", rtpe_config.warn_timeout_us / 1000000L);
+}
+static void cli_incoming_list_warnbackoff(str *instr, struct cli_writer *cw, const cli_handler_t *handler) {
+	cw->cw_printf(cw, "WARN_BACKOFF=%" PRId64 "\n", rtpe_config.warn_backoff_us / 1000000L);
 }
 static void cli_incoming_list_silenttimeout(str *instr, struct cli_writer *cw, const cli_handler_t *handler) {
 	cw->cw_printf(cw, "SILENT_TIMEOUT=%" PRId64 "\n", rtpe_config.silent_timeout_us / 1000000L);
@@ -1057,6 +1073,12 @@ static void cli_incoming_set_gentimeout_us(str *instr, struct cli_writer *cw, in
 
 static void cli_incoming_set_timeout(str *instr, struct cli_writer *cw, const cli_handler_t *handler) {
 	cli_incoming_set_gentimeout_us(instr, cw, &rtpe_config.timeout_us);
+}
+static void cli_incoming_set_warntimeout(str *instr, struct cli_writer *cw, const cli_handler_t *handler) {
+	cli_incoming_set_gentimeout_us(instr, cw, &rtpe_config.warn_timeout_us);
+}
+static void cli_incoming_set_warnbackoff(str *instr, struct cli_writer *cw, const cli_handler_t *handler) {
+	cli_incoming_set_gentimeout_us(instr, cw, &rtpe_config.warn_backoff_us);
 }
 static void cli_incoming_set_silenttimeout(str *instr, struct cli_writer *cw, const cli_handler_t *handler) {
 	cli_incoming_set_gentimeout_us(instr, cw, &rtpe_config.silent_timeout_us);

@@ -649,6 +649,7 @@ static void options(int *argc, char ***argv, charp_ht templates) {
 	bool codecs = false;
 	double max_load = 0;
 	double max_cpu = 0;
+	g_autoptr(char) timeout_warn_ep = NULL;
 	g_autoptr(char) dtmf_udp_ep = NULL;
 	g_autoptr(char) endpoint_learning = NULL;
 	g_autoptr(char) dtls_sig = NULL;
@@ -677,6 +678,8 @@ static void options(int *argc, char ***argv, charp_ht templates) {
 	g_autoptr(char) transcode_config = NULL;
 	int silent_timeout = 0;
 	int timeout = 0;
+	int warn_timeout = 0;
+	int warn_backoff = 0;
 	int final_timeout = 0;
 	int offer_timeout = 0;
 	int delete_delay = 30;
@@ -719,6 +722,8 @@ static void options(int *argc, char ***argv, charp_ht templates) {
 		{ "control-tos",0 , 0, G_OPTION_ARG_INT,	&rtpe_config.control_tos,		"Default TOS value to set on control-ng",	"INT"		},
 		{ "control-pmtu", 0,0,	G_OPTION_ARG_STRING,	&control_pmtu,	"Path MTU discovery behaviour on UDP control sockets",	"want|dont"		},
 		{ "timeout",	'o', 0, G_OPTION_ARG_INT,	&timeout,		"RTP timeout",			"SECS"		},
+		{ "warn-timeout",	0, 0, G_OPTION_ARG_INT,	&warn_timeout,		"RTP warning timeout",			"SECS"		},
+		{ "warn-backoff",	0, 0, G_OPTION_ARG_INT,	&warn_backoff,		" Backoff time between consecutive RTP timeout warnings for a packet stream",			"SECS"		},
 		{ "silent-timeout",'s',0,G_OPTION_ARG_INT,	&silent_timeout,	"RTP timeout for muted",	"SECS"		},
 		{ "final-timeout",'a',0,G_OPTION_ARG_INT,	&final_timeout,		"Call timeout",			"SECS"		},
 		{ "offer-timeout",0,0,	G_OPTION_ARG_INT,	&offer_timeout,		"Timeout for incomplete one-sided calls",	"SECS"		},
@@ -747,6 +752,7 @@ static void options(int *argc, char ***argv, charp_ht templates) {
 		{ "b2b-url",	'b', 0, G_OPTION_ARG_STRING,	&rtpe_config.b2b_url,	"XMLRPC URL of B2B UA"	,	"STRING"	},
 		{ "log-facility-cdr",0,  0, G_OPTION_ARG_STRING, &log_facility_cdr_s, "Syslog facility to use for logging CDRs", "daemon|local0|...|local7"},
 		{ "log-facility-rtcp",0,  0, G_OPTION_ARG_STRING, &log_facility_rtcp_s, "Syslog facility to use for logging RTCP", "daemon|local0|...|local7"},
+		{ "timeout-warn-dest", 0,0,	G_OPTION_ARG_STRING,	&timeout_warn_ep,	"Destination address for RTP timeout warning via UDP",	"IP46|HOSTNAME:PORT"	},
 #ifdef WITH_TRANSCODING
 		{ "log-facility-dtmf",0,  0, G_OPTION_ARG_STRING, &log_facility_dtmf_s, "Syslog facility to use for logging DTMF", "daemon|local0|...|local7"},
 		{ "dtmf-log-dest", 0,0,	G_OPTION_ARG_STRING,	&dtmf_udp_ep,	"Destination address for DTMF logging via UDP",	"IP46|HOSTNAME:PORT"	},
@@ -1103,6 +1109,14 @@ static void options(int *argc, char ***argv, charp_ht templates) {
 	if (rtpe_config.timeout_us <= 0)
 		rtpe_config.timeout_us = 60 * 1000000LL;
 
+	rtpe_config.warn_timeout_us = warn_timeout * 1000000LL;
+	if (rtpe_config.warn_timeout_us < 0)
+		rtpe_config.warn_timeout_us = 0;
+	
+	rtpe_config.warn_backoff_us = warn_backoff * 1000000LL;
+	if (rtpe_config.warn_backoff_us < 0)
+		rtpe_config.warn_backoff_us = 5 * 1000000LL;
+
 	rtpe_config.silent_timeout_us = silent_timeout * 1000000LL;
 	if (rtpe_config.silent_timeout_us <= 0)
 		rtpe_config.silent_timeout_us = 3600 * 1000000LL;
@@ -1200,6 +1214,11 @@ static void options(int *argc, char ***argv, charp_ht templates) {
 
 	if (debug_srtp)
 		rtpe_config.common.log_levels[log_level_index_srtp] = LOG_DEBUG;
+
+	if (timeout_warn_ep) {
+		if (!endpoint_parse_any_getaddrinfo_full(&rtpe_config.timeout_warn_ep, timeout_warn_ep))
+			die("Invalid IP or port '%s' (--timeout-warn-dest)", timeout_warn_ep);
+	}
 
 	if (dtmf_udp_ep) {
 		if (!endpoint_parse_any_getaddrinfo_full(&rtpe_config.dtmf_udp_ep, dtmf_udp_ep))
@@ -1606,6 +1625,8 @@ static void init_everything(charp_ht templates) {
 #endif
 	codeclib_init(0);
 	media_player_init();
+	if (!timeout_warn_init())
+		die("timeout_warn init failed, see log");
 	if (!dtmf_init())
 		die("DTMF init failed, see log");
 	jitter_buffer_init();

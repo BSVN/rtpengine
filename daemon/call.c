@@ -41,6 +41,74 @@
 
 #include "xt_RTPENGINE.h"
 
+static socket_t timeout_warn_sock;
+
+bool timeout_warn_init(void) {
+	if (!open_v46_socket(&timeout_warn_sock, SOCK_DGRAM)) {
+		ilog(LOG_ERR, "Failed to open/connect timeout warning socket: %s", strerror(errno));
+		return false;
+	}
+	return true;
+}
+
+static GString *timeout_warn_json_print(call_t *call, struct packet_stream *ps)
+{
+	
+	struct call_monologue *ml = ps->media->monologue;
+	GList *l = rtpe_config.ng_listen_ep.head;
+	endpoint_t *e = l->data;
+
+	GString *buf = g_string_new("");
+	g_string_append_printf(buf, "{"
+			"\"type\":\" %s \","
+			"\"port\":\" %u \","
+			"\"callid\":\"" STR_FORMAT "\","
+			"\"src_tag\":\"" STR_FORMAT "\","
+			"\"source_label\":\"" STR_FORMAT "\",",
+			PS_ISSET(ps, RTCP)? "RTCP":"RTP",
+			e->port,
+			STR_FMT(&call->callid),
+			STR_FMT(&ml->tag),
+			STR_FMT(ml->label.s ? &ml->label : &STR_EMPTY));
+
+	g_string_append_printf(buf, "\"dst_tags\":[");
+	
+	// TODO check "to tag" not repeated ?
+	bool first = true;
+	for (__auto_type l = ps->rtp_sinks.head; l; l = l->next) {
+		ml = l->data->sink->media->monologue;
+		if(first){
+			g_string_append_printf(buf,
+			"\"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+			first = false;
+		}else{
+			g_string_append_printf(buf,
+			", \"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+		}
+	}
+
+	for (__auto_type l = ps->rtcp_sinks.head; l; l = l->next) {
+		ml = l->data->sink->media->monologue;
+		if(first){
+			g_string_append_printf(buf,
+			"\"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+			first = false;
+		}else{
+			g_string_append_printf(buf,
+			", \"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+
+		}
+	}
+	g_string_append_printf(buf, "], ");
+
+	g_string_append_printf(buf,
+			"\"type\":\"timeout_warn\",\"timestamp\":%lu,\"source_ip\":\"%s\"}",
+			(unsigned long) rtpe_now / 1000000,
+			sockaddr_print_buf(&ps->endpoint.address));
+
+	return buf;
+}
+
 struct iterator_helper {
 	uint64_t		count;
 	GSList			*del_timeout;
@@ -139,6 +207,9 @@ static void call_timer_iterator(call_t *c, struct iterator_helper *hlp) {
 	rwlock_lock_r(&c->master_lock);
 	log_info_call(c);
 
+	int64_t warn_timeout = atomic_get_na(&rtpe_config.warn_timeout_us);
+	int64_t warn_backoff = atomic_get_na(&rtpe_config.warn_backoff_us);
+
 	// final timeout applicable to all calls (own and foreign)
 	int64_t final_timeout = atomic_get_na(&rtpe_config.final_timeout_us);
 	if (final_timeout && rtpe_now >= (c->created + final_timeout)) {
@@ -221,6 +292,30 @@ static void call_timer_iterator(call_t *c, struct iterator_helper *hlp) {
 			CALL_CLEAR(sfd->call, FOREIGN_MEDIA);
 
 no_sfd:
+		// check for timeout warning
+		bool deleted_streams = ps->call->deleted_us; 
+		bool warning_before_establsh = (!c->established)||((rtpe_now - c->established) < warn_timeout);
+		bool timed_out = (rtpe_now - packet_stream_last_packet(ps)) > warn_timeout;
+		bool backoff = (rtpe_now - ps->last_warn_time) < warn_backoff;
+
+		bool issue_warning = warn_timeout && !deleted_streams && !warning_before_establsh && timed_out && !backoff;
+		if(issue_warning){
+			GString *buf = timeout_warn_json_print(c, ps);
+			if (socket_sendto(&timeout_warn_sock, buf->str, buf->len, &rtpe_config.timeout_warn_ep) < 0){
+				ilog(LOG_ERR, "Error sending timeout warning event info to UDP destination %s: %s",
+					endpoint_print_buf(&rtpe_config.timeout_warn_ep),
+					strerror(errno));
+			}
+			g_string_free(buf, TRUE);
+			// TODO put last_warn_time on call?
+			ps->last_warn_time = rtpe_now;
+			for (__auto_type l = ps->rtp_sinks.head; l; l = l->next) {
+				l->data->sink->last_warn_time = rtpe_now;
+			}
+			for (__auto_type l = ps->rtcp_sinks.head; l; l = l->next) {
+				l->data->sink->last_warn_time = rtpe_now;
+			}
+		}
 		if (good)
 			continue;
 
@@ -1006,6 +1101,7 @@ struct packet_stream *__packet_stream_new(call_t *call) {
 	mutex_init(&stream->lock);
 	stream->call = call;
 	atomic64_set_na(&stream->last_packet_us, rtpe_now);
+	stream->last_warn_time = 0;
 	stream->rtp_stats = rtp_stats_ht_new();
 	recording_init_stream(stream);
 	stream->send_timer = send_timer_new(stream);
@@ -4640,6 +4736,7 @@ static call_t *call_create(const str *callid) {
 	call_memory_arena_set(c);
 	c->callid = call_str_cpy(callid);
 	c->created = rtpe_now;
+	c->established = 0;
 	c->dtls_cert = dtls_cert();
 	c->tos = rtpe_config.default_tos;
 	c->poller = rtpe_get_poller();
@@ -5424,6 +5521,11 @@ tag_setup:
 	/* the fromtag monologue may be newly created, or half-complete from the totag, or
 	 * derived from the viabranch. */
 	__monologue_tag(ft, fromtag);
+
+	if(!call->established){
+		call->established = rtpe_now;
+	}
+	
 
 	dialogue_unconfirm(ft, "dialogue signalling event");
 	dialogue_unconfirm(tt, "dialogue signalling event");
