@@ -59,17 +59,28 @@ static GString *timeout_warn_json_print(call_t *call, struct packet_stream *ps)
 	endpoint_t *e = l->data;
 
 	GString *buf = g_string_new("");
+	GString *ip_buf = g_string_new("");
+	GString *log_intf_buf = g_string_new("");
+
+	struct local_intf *local_intf = get_interface_address(ml->logical_intf, ml->logical_intf->preferred_family);
+	if(local_intf && local_intf->spec){
+		sockaddr_print_gstring(log_intf_buf, &(local_intf->spec->local_address.addr));
+	}
+
+	sockaddr_print_gstring(ip_buf, &(e->address));
+
+
 	g_string_append_printf(buf, "{"
-			"\"type\":\" %s \","
-			"\"port\":\" %u \","
-			"\"callid\":\"" STR_FORMAT "\","
-			"\"src_tag\":\"" STR_FORMAT "\","
-			"\"source_label\":\"" STR_FORMAT "\",",
+			"\"type\":\"%s\","
+			"\"rtpe_ctrl_ip\":\"%s\","
+			"\"callid\":\""STR_FORMAT"\","
+			"\"log_intf\":\"%s\","
+			"\"src_tag\":\""STR_FORMAT"\",",
 			PS_ISSET(ps, RTCP)? "RTCP":"RTP",
-			e->port,
+			ip_buf->str,
 			STR_FMT(&call->callid),
-			STR_FMT(&ml->tag),
-			STR_FMT(ml->label.s ? &ml->label : &STR_EMPTY));
+			log_intf_buf->str,
+			STR_FMT(&ml->tag));
 
 	g_string_append_printf(buf, "\"dst_tags\":[");
 	
@@ -79,11 +90,11 @@ static GString *timeout_warn_json_print(call_t *call, struct packet_stream *ps)
 		ml = l->data->sink->media->monologue;
 		if(first){
 			g_string_append_printf(buf,
-			"\"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+			"\""STR_FORMAT"\"", STR_FMT(&ml->tag));
 			first = false;
 		}else{
 			g_string_append_printf(buf,
-			", \"" STR_FORMAT "\"", STR_FMT(&ml->tag));
+			",\""STR_FORMAT"\"", STR_FMT(&ml->tag));
 		}
 	}
 
@@ -105,6 +116,9 @@ static GString *timeout_warn_json_print(call_t *call, struct packet_stream *ps)
 			"\"type\":\"timeout_warn\",\"timestamp\":%lu,\"source_ip\":\"%s\"}",
 			(unsigned long) rtpe_now / 1000000,
 			sockaddr_print_buf(&ps->endpoint.address));
+
+	g_string_free_str(log_intf_buf);
+	g_string_free_str(ip_buf);
 
 	return buf;
 }
